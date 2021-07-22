@@ -4,7 +4,6 @@ module IBM_Functions_WithPatchCorrT
     using StatsBase
     using Random
     using Statistics
-    # using Plots
 
     function Diffusion(X::Array{Float64,2},kernel_2D::Array{Float64,2})
         Xnew=FastConv.convn(X,kernel_2D)
@@ -39,11 +38,6 @@ module IBM_Functions_WithPatchCorrT
         for i in 1:length(x); Conc[x[i],y[i]]+=1; end
         return Conc
     end
-
-    # function LloydPatchiness(Conc::Array{Int64,1})
-    #     Mean=mean(Conc)
-    #     return 1+(var(Conc)-Mean)/Mean^2 # Lloyd's patchiness index P=1+(var-mean)*mean² (density independent)
-    # end
 
     function LloydPatchiness(Conc::Array{Int64,2})
         Conc=Conc[:,1:2:end-1].+Conc[:,2:2:end] # adding 4 grid cells together to one quadrat (here: 1 cm^2) where individuals are counted
@@ -132,9 +126,6 @@ module IBM_Functions_WithPatchCorrT
 
             ## 2. Recycling of Nutrients
             PosDeath=LinIndex(vcat(xtox_dead,xnon_dead),vcat(ytox_dead,ynon_dead),Ngrid)   # Linear index - position of new born cells
-            # @inbounds for i in PosDeath
-            #     C[i] += qN
-            # end
             RecyclN_perPatch=length(PosDeath)/length(C)*qN
             C.=C.+RecyclN_perPatch
 
@@ -161,29 +152,6 @@ module IBM_Functions_WithPatchCorrT
             ### Diffuse toxins
             T=Diffusion(T,kernel_2D)
 
-            # ## 5. Turbulence
-            # phi=rand()*2*pi                 # phase for turbulence wave in x-direction
-            # theta=rand()*2*pi               # phase for turbulence wave in y-direction
-            #
-            # ### Cells
-            # xtox=Turbulence(xtox,ytox,U,phi,Ngrid,dt)
-            # ytox=Turbulence(ytox,xtox,U,theta,Ngrid,dt) #using updated xtox
-            # xnon=Turbulence(xnon,ynon,U,phi,Ngrid,dt)
-            # ynon=Turbulence(ynon,xnon,U,theta,Ngrid,dt) # using updated xnon
-            #
-            # ### Molecules
-            # Col_dx=@. round(Int64,U/2*cos(2*pi*(1:Ngrid)/Ngrid+phi))   # distances for turbulence movement in x-direction
-            # Row_dy=@. round(Int64,U/2*cos(2*pi*(1:Ngrid)/Ngrid+theta))
-            #
-            # for j in 1:Ngrid # run through y dimension and move in x direction
-            #     C[:,j]=circshift(C[:,j],Col_dx[j])
-            #     T[:,j]=circshift(T[:,j],Col_dx[j])
-            # end
-            # for i in 1:Ngrid # run through x dimension and move in y direction
-            #     C[i,:]=circshift(C[i,:],Row_dy[i])
-            #     T[i,:]=circshift(T[i,:],Row_dy[i])
-            # end
-
             ## 5. Update results
             PopDens[t+1,:]=[length(xnon),length(xtox)]
 
@@ -191,10 +159,6 @@ module IBM_Functions_WithPatchCorrT
             TOX=CellCount(xtox,ytox,Ngrid) # Cell conc. per grid cell
             Patchiness[t+1,1]=LloydPatchiness(NON)
             Patchiness[t+1,2]=LloydPatchiness(TOX)
-            # NON_nozero=filter(!iszero, NON) # exclude patches with no individuals (see Bez 2000)
-            # TOX_nozero=filter(!iszero, TOX)
-            # Patchiness[t+1,1]=LloydPatchiness(NON_nozero)
-            # Patchiness[t+1,2]=LloydPatchiness(TOX_nozero)
 
             Correlation[t+1,:]=CorrAllCombinations(NON,TOX,T,C)
 
