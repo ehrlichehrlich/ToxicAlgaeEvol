@@ -4,7 +4,6 @@ module IBM_Functions_Turbulence
     using StatsBase
     using Random
     using Statistics
-    # using Plots
 
     function Diffusion(X::Array{Float64,2},kernel_2D::Array{Float64,2})
         Xnew=FastConv.convn(X,kernel_2D)
@@ -119,9 +118,6 @@ module IBM_Functions_Turbulence
 
             ## 2. Recycling of Nutrients
             PosDeath=LinIndex(vcat(xtox_dead,xnon_dead),vcat(ytox_dead,ynon_dead),Ngrid)   # Linear index - position of new born cells
-            # @inbounds for i in PosDeath
-            #     C[i] += qN
-            # end
             RecyclN_perPatch=length(PosDeath)/length(C)*qN
             C.=C.+RecyclN_perPatch
 
@@ -178,11 +174,7 @@ module IBM_Functions_Turbulence
             TOX=CellCount(xtox,ytox,Ngrid) # Cell conc. per grid cell
             Patchiness[t+1,1]=LloydPatchiness(NON)
             Patchiness[t+1,2]=LloydPatchiness(TOX)
-            # NON_nozero=filter(!iszero, NON) # exclude patches with no individuals (see Bez 2000)
-            # TOX_nozero=filter(!iszero, TOX)
-            # Patchiness[t+1,1]=LloydPatchiness(NON_nozero)
-            # Patchiness[t+1,2]=LloydPatchiness(TOX_nozero)
-
+            
             Correlation[t+1,:]=CorrAllCombinations(NON,TOX,T,C)
 
             ## Toxin conc. experienced by a non-toxic/toxic cell
