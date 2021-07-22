@@ -1,0 +1,213 @@
+module IBM_Functions_WithPatchCorrT
+
+    include("./FastConv/FastConv")
+    using StatsBase
+    using Random
+    using Statistics
+    # using Plots
+
+    function Diffusion(X::Array{Float64,2},kernel_2D::Array{Float64,2})
+        Xnew=FastConv.convn(X,kernel_2D)
+        Xnew[:,2] .= Xnew[:,2] .+ Xnew[:,end]
+        Xnew[:,end-1] .= Xnew[:,end-1] .+ Xnew[:,1]
+        Xnew[2,:] .= Xnew[2,:] .+ Xnew[end,:]
+        Xnew[end-1,:] .= Xnew[end-1,:] .+ Xnew[1,:]
+        X.=Xnew[2:end-1,2:end-1]
+        return X
+    end
+
+    function Move(xy::Array{Int64,1},Ngrid::Int64,Δ::Float64)
+        mod.(round.(Int, xy.-1 .+ randn(length(xy)) .* Δ),Ngrid) .+ 1
+    end
+
+    function Turbulence(x,y,U,phase,Ngrid,dt)
+        ddx=@. round(Int64,U/2*cos(2*pi*y/Ngrid+phase))   # distances for turbulence movement in x-direction
+        xx=@. mod(x-1+ddx,Ngrid)+1
+    end
+
+    function BirthDeathDice(prob::Array{Float64,1})
+        rv=rand(length(prob))
+        rv.<=prob
+    end
+
+    function LinIndex(x::Array{Int64,1},y::Array{Int64,1},Ngrid::Int64)
+        @. (y-1)*Ngrid+x
+    end
+
+    function CellCount(x::Array{Int64,1},y::Array{Int64,1},Ngrid::Int64)
+        Conc=zeros(Int64,Ngrid,Ngrid) # cell concentration
+        for i in 1:length(x); Conc[x[i],y[i]]+=1; end
+        return Conc
+    end
+
+    # function LloydPatchiness(Conc::Array{Int64,1})
+    #     Mean=mean(Conc)
+    #     return 1+(var(Conc)-Mean)/Mean^2 # Lloyd's patchiness index P=1+(var-mean)*mean² (density independent)
+    # end
+
+    function LloydPatchiness(Conc::Array{Int64,2})
+        Conc=Conc[:,1:2:end-1].+Conc[:,2:2:end] # adding 4 grid cells together to one quadrat (here: 1 cm^2) where individuals are counted
+        Conc=Conc[1:2:end-1,:].+Conc[2:2:end,:]
+        Mean=mean(Conc)
+        return Mean+(var(Conc)/Mean-1) #Lloyd's mean crowding --> mean number of neighbors in quadrats of 1 cm^2
+        #return 1+(var(Conc)-Mean)/Mean^2 # Lloyd's patchiness index P=1+(var-mean)*mean² (density independent)
+    end
+
+    function MeanCrowdingBetweenStrains(ConcNon::Array{Int64,2},ConcTox::Array{Int64,2})
+        ConcNon=ConcNon[:,1:2:end-1].+ConcNon[:,2:2:end] # adding 4 grid cells together to one quadrat (here: 1 cm^2) where individuals are counted
+        ConcNon=ConcNon[1:2:end-1,:].+ConcNon[2:2:end,:]
+        ConcTox=ConcTox[:,1:2:end-1].+ConcTox[:,2:2:end] # adding 4 grid cells together to one quadrat (here: 1 cm^2) where individuals are counted
+        ConcTox=ConcTox[1:2:end-1,:].+ConcTox[2:2:end,:]
+        return (ConcNon.*ConcTox)./sum(ConcNon) # Mean number of toxic cells at the same quadrat as a non-toxic cell
+    end
+
+    function CorrAllCombinations(NON::Array{Int64,2},TOX::Array{Int64,2},T::Array{Float64,2},C::Array{Float64,2})
+        [cor(vec(TOX),vec(NON)),   cor(vec(NON),vec(T)),   cor(vec(TOX),vec(T)),
+         cor(vec(T),vec(C)),   cor(vec(NON),vec(C)),   cor(vec(TOX),vec(C))]
+        # Non-toxic and toxic cells, # Non-toxic cells and Toxins, # Toxic cells and Toxins,
+        # Toxins and Nutrients, # Non-toxic cells and Nutrients, # Toxic cells and Nutrients
+    end
+
+    function Sim_Tox_Graz_PDE(C::Array{Float64,2},T::Array{Float64,2},xnon::Array{Int64,1},ynon::Array{Int64,1},xtox::Array{Int64,1},ytox::Array{Int64,1},
+                        PopDens ::Array{Int64,2},Patchiness::Array{Float64,2},Correlation::Array{Float64,2},T_exposed::Array{Float64,2},G_reduced::Array{Float64,2},
+                        Ngrid::Int64,t_start::Int64,t_end::Int64,λ::Float64,Q::Float64,rmax_tox::Float64,rmax_non::Float64,mtox::Float64,
+                        mnon::Float64,Gmax_tox::Float64,Gmax_non::Float64,HC::Float64,HT::Float64,
+                        qN::Float64,dt::Float64,kernel_2D::Array{Float64,2},Δ::Float64) #,U::Float64)
+        @inbounds for t in t_start:t_end
+            ## 1. Birth and death of cells
+            PosTox=LinIndex(xtox,ytox,Ngrid)
+            PosNon=LinIndex(xnon,ynon,Ngrid)
+
+            ### realized rates
+            rtox=@. rmax_tox*C[PosTox]/(HC+C[PosTox])
+            rnon=@. rmax_non*C[PosNon]/(HC+C[PosNon])
+            Gtox=@. Gmax_tox*(1.0-T[PosTox]/(HT+T[PosTox]))
+            Gnon=@. Gmax_non*(1.0-T[PosNon]/(HT+T[PosNon]))
+
+            ### corresponding probabilities
+            ptox=@. exp(rtox*dt)-1
+            pnon=@. exp(rnon*dt)-1
+            gtox=@. -exp(-Gtox*dt)+1
+            gnon=@. -exp(-Gnon*dt)+1
+
+            ### Birth
+            x=vcat(xtox,xnon)
+            y=vcat(ytox,ynon)
+            p=vcat(ptox,pnon)
+
+            CellsReprod=BirthDeathDice(p)
+            IndexReprod=(1:length(CellsReprod))[CellsReprod]
+            shuffle!(IndexReprod) # random order
+            xtox_birth=zeros(Int64,0) # initialize empty Array
+            ytox_birth=zeros(Int64,0)
+            xnon_birth=zeros(Int64,0)
+            ynon_birth=zeros(Int64,0)
+            # Threads.@threads
+            @inbounds for i in IndexReprod
+                if C[x[i],y[i]]>=qN
+                    if i <= length(xtox)
+                        push!(xtox_birth,x[i])
+                        push!(ytox_birth,y[i])
+                    else
+                        push!(xnon_birth,x[i])
+                        push!(ynon_birth,y[i])
+                    end
+                    C[x[i],y[i]] -= qN
+                end
+            end
+
+            ### Death
+            CellsDeadTox=BirthDeathDice(mtox.+gtox)                # Indices of dying cells (marked with 'true')
+            CellsDeadNon=BirthDeathDice(mnon.+gnon)
+            xtox_dead=xtox[CellsDeadTox]
+            ytox_dead=ytox[CellsDeadTox]
+            xnon_dead=xnon[CellsDeadNon]
+            ynon_dead=ynon[CellsDeadNon]
+
+            ### Update population
+            xtox=vcat(xtox[.!(CellsDeadTox)],xtox_birth)
+            ytox=vcat(ytox[.!(CellsDeadTox)],ytox_birth)
+            xnon=vcat(xnon[.!(CellsDeadNon)],xnon_birth)
+            ynon=vcat(ynon[.!(CellsDeadNon)],ynon_birth)
+
+            ## 2. Recycling of Nutrients
+            PosDeath=LinIndex(vcat(xtox_dead,xnon_dead),vcat(ytox_dead,ynon_dead),Ngrid)   # Linear index - position of new born cells
+            # @inbounds for i in PosDeath
+            #     C[i] += qN
+            # end
+            RecyclN_perPatch=length(PosDeath)/length(C)*qN
+            C.=C.+RecyclN_perPatch
+
+            ## 3. Toxin leakage and decay
+            PosTox=LinIndex(xtox,ytox,Ngrid)
+            T_decay=λ.*dt.*T
+            ### Leak toxins
+            @inbounds for i in PosTox
+                T[i] += Q*dt
+            end
+            ### Decay toxins
+            T.=T.-T_decay
+
+            ## 4. Movement/Diffusion of cells, nutrients and toxins
+            ### Move cells
+            xtox = Move(xtox,Ngrid,Δ)
+            ytox = Move(ytox,Ngrid,Δ)
+            xnon = Move(xnon,Ngrid,Δ)
+            ynon = Move(ynon,Ngrid,Δ)
+
+            ### Diffuse nutrients
+            C=Diffusion(C,kernel_2D)
+
+            ### Diffuse toxins
+            T=Diffusion(T,kernel_2D)
+
+            # ## 5. Turbulence
+            # phi=rand()*2*pi                 # phase for turbulence wave in x-direction
+            # theta=rand()*2*pi               # phase for turbulence wave in y-direction
+            #
+            # ### Cells
+            # xtox=Turbulence(xtox,ytox,U,phi,Ngrid,dt)
+            # ytox=Turbulence(ytox,xtox,U,theta,Ngrid,dt) #using updated xtox
+            # xnon=Turbulence(xnon,ynon,U,phi,Ngrid,dt)
+            # ynon=Turbulence(ynon,xnon,U,theta,Ngrid,dt) # using updated xnon
+            #
+            # ### Molecules
+            # Col_dx=@. round(Int64,U/2*cos(2*pi*(1:Ngrid)/Ngrid+phi))   # distances for turbulence movement in x-direction
+            # Row_dy=@. round(Int64,U/2*cos(2*pi*(1:Ngrid)/Ngrid+theta))
+            #
+            # for j in 1:Ngrid # run through y dimension and move in x direction
+            #     C[:,j]=circshift(C[:,j],Col_dx[j])
+            #     T[:,j]=circshift(T[:,j],Col_dx[j])
+            # end
+            # for i in 1:Ngrid # run through x dimension and move in y direction
+            #     C[i,:]=circshift(C[i,:],Row_dy[i])
+            #     T[i,:]=circshift(T[i,:],Row_dy[i])
+            # end
+
+            ## 5. Update results
+            PopDens[t+1,:]=[length(xnon),length(xtox)]
+
+            NON=CellCount(xnon,ynon,Ngrid) # Cell conc. per grid cell
+            TOX=CellCount(xtox,ytox,Ngrid) # Cell conc. per grid cell
+            Patchiness[t+1,1]=LloydPatchiness(NON)
+            Patchiness[t+1,2]=LloydPatchiness(TOX)
+            # NON_nozero=filter(!iszero, NON) # exclude patches with no individuals (see Bez 2000)
+            # TOX_nozero=filter(!iszero, TOX)
+            # Patchiness[t+1,1]=LloydPatchiness(NON_nozero)
+            # Patchiness[t+1,2]=LloydPatchiness(TOX_nozero)
+
+            Correlation[t+1,:]=CorrAllCombinations(NON,TOX,T,C)
+
+            ## Mean toxin conc. experienced by a non-toxic/toxic cell
+            mean_T=mean(T)
+            T_exposed[t+1,1]=cov(vec(NON),vec(T))/mean(NON)+mean_T # for non-toxic cell
+            T_exposed[t+1,2]=cov(vec(TOX),vec(T))/mean(TOX)+mean_T # for toxic cell
+
+            ## Mean reduction of grazing loss (%)
+            G_reduced[t+1,1]=mean(1 .- Gnon ./Gmax_non)
+            G_reduced[t+1,2]=mean(1 .- Gtox ./Gmax_tox)
+        end
+
+        return C, T, xnon, ynon, xtox, ytox, PopDens, Patchiness, Correlation, T_exposed, G_reduced
+    end
+end #module
